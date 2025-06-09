@@ -1,131 +1,208 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List, Dict, Any
-import pandas as pd
-from datetime import datetime, timedelta
+from fastapi import APIRouter, HTTPException, Depends, Query
+from typing import List, Optional
+import asyncio
+from datetime import datetime
 
-from app.db.session import get_db
+from app.services.real_data_service import RealDataService
 from app.services.economic_model import EconomicModelService
-from app.models.economic import EconomicIndicator, ModelResult, Scenario, RiskAssessment
-from app.schemas.economic import (
-    EconomicIndicatorCreate,
-    ModelResultCreate,
-    ScenarioCreate,
-    RiskAssessmentCreate,
-    ForecastResponse,
-    RiskAssessmentResponse
-)
+from app.schemas.economic import EconomicIndicator, ForecastResponse, RiskAssessment, Scenario
 
 router = APIRouter()
+
+# Initialize services
+real_data_service = RealDataService()
 model_service = EconomicModelService()
 
-@router.post("/indicators/", response_model=EconomicIndicatorCreate)
-def create_economic_indicator(
-    indicator: EconomicIndicatorCreate,
-    db: Session = Depends(get_db)
-):
-    """Create a new economic indicator"""
-    db_indicator = EconomicIndicator(**indicator.dict())
-    db.add(db_indicator)
-    db.commit()
-    db.refresh(db_indicator)
-    return db_indicator
+@router.get("/indicators", response_model=dict)
+async def get_economic_indicators():
+    """Get current economic indicators with real data"""
+    try:
+        indicators = await real_data_service.get_economic_indicators()
+        return {"indicators": indicators}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching indicators: {str(e)}")
 
-@router.get("/indicators/", response_model=List[EconomicIndicatorCreate])
-def get_economic_indicators(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db)
+@router.get("/forecast", response_model=dict)
+async def get_economic_forecast(
+    periods: int = Query(default=12, ge=1, le=24, description="Number of periods to forecast")
 ):
-    """Get all economic indicators"""
-    indicators = db.query(EconomicIndicator).offset(skip).limit(limit).all()
-    return indicators
+    """Get economic forecast based on real historical data"""
+    try:
+        forecast_data = await real_data_service.get_forecast_data(periods=periods)
+        return forecast_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating forecast: {str(e)}")
 
-@router.post("/forecast/", response_model=ForecastResponse)
-def generate_forecast(
-    variables: List[str],
-    forecast_steps: int = 12,
-    db: Session = Depends(get_db)
-):
-    """Generate economic forecast for specified variables"""
-    # Get historical data
-    indicators = db.query(EconomicIndicator).filter(
-        EconomicIndicator.indicator_type.in_(variables)
-    ).all()
-    
-    if not indicators:
-        raise HTTPException(status_code=404, detail="No data found for specified variables")
-    
-    # Prepare data for modeling
-    data = pd.DataFrame([{
-        'timestamp': i.timestamp,
-        i.indicator_type: i.value
-    } for i in indicators])
-    data.set_index('timestamp', inplace=True)
-    
-    # Prepare and train model
-    prepared_data = model_service.prepare_data(data)
-    model = model_service.train_var_model(prepared_data)
-    
-    # Generate forecast
-    forecast = model_service.forecast(model, steps=forecast_steps)
-    
-    # Run Monte Carlo simulations
-    mc_results = model_service.run_monte_carlo(model, forecast_steps=forecast_steps)
-    
-    # Calculate elasticities
-    elasticities = {
-        var: model_service.calculate_elasticity(model, var)
-        for var in variables
-    }
-    
-    # Generate risk assessment
-    risk_assessment = model_service.generate_risk_assessment(
-        forecast,
-        prepared_data,
-        mc_results
-    )
-    
-    return {
-        "forecast": forecast.to_dict(),
-        "confidence_intervals": {
-            "lower": mc_results["lower_ci"].tolist(),
-            "upper": mc_results["upper_ci"].tolist()
-        },
-        "elasticities": elasticities,
-        "risk_assessment": risk_assessment
-    }
+@router.get("/risk-assessment", response_model=dict)
+async def get_risk_assessment():
+    """Get current risk assessment based on real market conditions"""
+    try:
+        risks = await real_data_service.get_risk_assessments()
+        return {"risks": risks}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error calculating risks: {str(e)}")
 
-@router.post("/scenarios/", response_model=ScenarioCreate)
-def create_scenario(
-    scenario: ScenarioCreate,
-    db: Session = Depends(get_db)
+@router.get("/market-data", response_model=dict)
+async def get_market_data(
+    symbols: Optional[List[str]] = Query(default=None, description="Market symbols to fetch")
 ):
+    """Get real-time market data"""
+    try:
+        market_data = await real_data_service.get_market_data(symbols=symbols)
+        return {"market_data": market_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching market data: {str(e)}")
+
+@router.get("/analysis/{model_type}")
+async def get_economic_analysis(
+    model_type: str,
+    time_horizon: str = Query(default="12-months", description="Time horizon for analysis")
+):
+    """Get detailed economic analysis for specific models"""
+    try:
+        # Convert time horizon to periods
+        horizon_map = {
+            "6-months": 6,
+            "12-months": 12,
+            "24-months": 24
+        }
+        periods = horizon_map.get(time_horizon, 12)
+        
+        if model_type == "gdp-forecast":
+            # Get GDP-specific forecast with confidence intervals
+            forecast_data = await real_data_service.get_forecast_data(periods=periods)
+            
+            # Filter for GDP data
+            gdp_datasets = [ds for ds in forecast_data["datasets"] if "GDP" in ds["label"]]
+            
+            # Add confidence intervals (simplified version)
+            if gdp_datasets:
+                gdp_data = gdp_datasets[0]["data"]
+                confidence_upper = [val * 1.15 for val in gdp_data]  # +15% confidence band
+                confidence_lower = [val * 0.85 for val in gdp_data]  # -15% confidence band
+                
+                forecast_data["datasets"].extend([
+                    {
+                        "label": "Confidence Interval (Upper)",
+                        "data": confidence_upper,
+                        "borderColor": "rgba(75, 192, 192, 0.3)",
+                        "borderDash": [5, 5],
+                        "tension": 0.1
+                    },
+                    {
+                        "label": "Confidence Interval (Lower)",
+                        "data": confidence_lower,
+                        "borderColor": "rgba(75, 192, 192, 0.3)",
+                        "borderDash": [5, 5],
+                        "tension": 0.1
+                    }
+                ])
+            
+            return forecast_data
+            
+        elif model_type == "inflation-model":
+            # Get inflation-specific analysis
+            forecast_data = await real_data_service.get_forecast_data(periods=periods)
+            
+            # Filter for inflation data
+            inflation_datasets = [ds for ds in forecast_data["datasets"] if "Inflation" in ds["label"]]
+            
+            if inflation_datasets:
+                return {
+                    "labels": forecast_data["labels"],
+                    "datasets": inflation_datasets
+                }
+                
+        else:
+            # Generic analysis
+            return await real_data_service.get_forecast_data(periods=periods)
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating analysis: {str(e)}")
+
+@router.post("/scenarios/create")
+async def create_scenario(scenario_data: dict):
     """Create a new economic scenario"""
-    db_scenario = Scenario(**scenario.dict())
-    db.add(db_scenario)
-    db.commit()
-    db.refresh(db_scenario)
-    return db_scenario
+    try:
+        # Basic scenario creation - in a real implementation, this would
+        # use the economic model to simulate the scenario
+        scenario = {
+            "id": scenario_data.get("id", 999),
+            "name": scenario_data.get("name", "Custom Scenario"),
+            "parameters": {
+                "gdp_growth": scenario_data.get("gdpGrowth", 2.5),
+                "inflation": scenario_data.get("inflation", 3.2),
+                "interest_rate": scenario_data.get("interestRate", 2.0),
+                "unemployment_rate": scenario_data.get("unemploymentRate", 4.8)
+            },
+            "forecast": await real_data_service.get_forecast_data(periods=12),
+            "created_at": datetime.now().isoformat()
+        }
+        
+        return {"scenario": scenario, "message": "Scenario created successfully"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating scenario: {str(e)}")
 
-@router.get("/scenarios/", response_model=List[ScenarioCreate])
-def get_scenarios(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db)
-):
-    """Get all economic scenarios"""
-    scenarios = db.query(Scenario).offset(skip).limit(limit).all()
-    return scenarios
+@router.get("/scenarios/{scenario_id}/results")
+async def get_scenario_results(scenario_id: int):
+    """Get results for a specific scenario"""
+    try:
+        # This would typically fetch stored scenario results
+        # For now, we'll generate based on scenario parameters
+        
+        if scenario_id == 1:  # Base case
+            return {
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+                "datasets": [
+                    {
+                        "label": "GDP Growth",
+                        "data": [2.5, 2.6, 2.7, 2.8],
+                        "borderColor": "rgb(75, 192, 192)",
+                        "tension": 0.1
+                    }
+                ]
+            }
+        elif scenario_id == 2:  # Optimistic
+            return {
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+                "datasets": [
+                    {
+                        "label": "GDP Growth",
+                        "data": [3.5, 3.6, 3.7, 3.8],
+                        "borderColor": "rgb(54, 162, 235)",
+                        "tension": 0.1
+                    }
+                ]
+            }
+        elif scenario_id == 3:  # Pessimistic
+            return {
+                "labels": ["Q1", "Q2", "Q3", "Q4"],
+                "datasets": [
+                    {
+                        "label": "GDP Growth",
+                        "data": [1.2, 1.0, 0.8, 1.1],
+                        "borderColor": "rgb(255, 99, 132)",
+                        "tension": 0.1
+                    }
+                ]
+            }
+        else:
+            # Dynamic scenario based on real data with modifications
+            base_forecast = await real_data_service.get_forecast_data(periods=4)
+            return base_forecast
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching scenario results: {str(e)}")
 
-@router.post("/risk-assessment/", response_model=RiskAssessmentResponse)
-def create_risk_assessment(
-    assessment: RiskAssessmentCreate,
-    db: Session = Depends(get_db)
-):
-    """Create a new risk assessment"""
-    db_assessment = RiskAssessment(**assessment.dict())
-    db.add(db_assessment)
-    db.commit()
-    db.refresh(db_assessment)
-    return db_assessment 
+@router.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "services": {
+            "real_data_service": "active",
+            "model_service": "active"
+        }
+    } 

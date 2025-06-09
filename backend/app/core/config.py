@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # CORS Configuration
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = ["http://localhost:3000"]
+    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     
     # Database Configuration
     POSTGRES_SERVER: str = "localhost"
@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     
     # External API Keys (to be configured)
     FRED_API_KEY: str = ""
+    ALPHA_VANTAGE_API_KEY: str = ""
     BLS_API_KEY: str = ""
     
     class Config:

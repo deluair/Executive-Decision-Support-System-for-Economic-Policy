@@ -1,16 +1,12 @@
-FROM node:16-alpine
+FROM node:18-alpine
 
 WORKDIR /app
 
-# Install dependencies
-COPY package.json package-lock.json ./
+COPY package.json ./
 RUN npm install
 
-# Copy application code
 COPY . .
 
-# Build the application
-RUN npm run build
+EXPOSE 3000
 
-# Run the application
 CMD ["npm", "run", "dev"] 

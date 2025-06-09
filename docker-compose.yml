@@ -28,6 +28,10 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/executive_decision_support
       - REDIS_URL=redis://redis:6379
+      - FRED_API_KEY=${FRED_API_KEY:-demo_key}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-demo_key}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
+      - DEBUG=True
     depends_on:
       - db
       - redis

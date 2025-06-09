@@ -1,100 +1,94 @@
-import axios from 'axios';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+class ApiService {
+  private baseUrl: string;
 
-export interface EconomicIndicator {
-  id: number;
-  indicator_type: string;
-  value: number;
-  timestamp: string;
-  source: string;
-  confidence_interval: number;
-  metadata?: Record<string, any>;
-}
+  constructor(baseUrl: string = API_BASE_URL) {
+    this.baseUrl = baseUrl;
+  }
 
-export interface ForecastResult {
-  forecast: Record<string, number[]>;
-  confidence_intervals: {
-    lower: number[][];
-    upper: number[][];
-  };
-  elasticities: Record<string, {
-    short_run: number;
-    long_run: number;
-    max_impact: number;
-  }>;
-  risk_assessment: Record<string, {
-    level: string;
-    volatility_ratio: number;
-    confidence_interval_width: number;
-  }>;
-}
+  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    const url = `${this.baseUrl}${endpoint}`;
+    
+    const config: RequestInit = {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      ...options,
+    };
 
-export interface Scenario {
-  id: number;
-  name: string;
-  description: string;
-  parameters: Record<string, any>;
-  results: Record<string, any>;
-  created_at: string;
-  user_id: number;
-}
+    try {
+      const response = await fetch(url, config);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error(`API request failed for ${endpoint}:`, error);
+      throw error;
+    }
+  }
 
-export interface RiskAssessment {
-  id: number;
-  scenario_id: number;
-  risk_level: string;
-  probability: number;
-  impact: number;
-  description: string;
-  mitigation_strategy: string;
-  created_at: string;
-}
-
-export const economicApi = {
   // Economic Indicators
-  getIndicators: async (): Promise<EconomicIndicator[]> => {
-    const response = await api.get('/api/v1/indicators/');
-    return response.data;
-  },
+  async getEconomicIndicators() {
+    return this.request('/api/v1/economic/indicators');
+  }
 
-  createIndicator: async (indicator: Omit<EconomicIndicator, 'id' | 'timestamp'>): Promise<EconomicIndicator> => {
-    const response = await api.post('/api/v1/indicators/', indicator);
-    return response.data;
-  },
+  // Forecast Data
+  async getForecastData(periods: number = 12) {
+    return this.request(`/api/v1/economic/forecast?periods=${periods}`);
+  }
 
-  // Forecasts
-  generateForecast: async (variables: string[], forecast_steps: number = 12): Promise<ForecastResult> => {
-    const response = await api.post('/api/v1/forecast/', {
-      variables,
-      forecast_steps,
+  // Risk Assessment
+  async getRiskAssessment() {
+    return this.request('/api/v1/economic/risk-assessment');
+  }
+
+  // Market Data
+  async getMarketData(symbols?: string[]) {
+    const symbolsParam = symbols ? `?symbols=${symbols.join(',')}` : '';
+    return this.request(`/api/v1/economic/market-data${symbolsParam}`);
+  }
+
+  // Economic Analysis
+  async getEconomicAnalysis(modelType: string, timeHorizon: string = '12-months') {
+    return this.request(`/api/v1/economic/analysis/${modelType}?time_horizon=${timeHorizon}`);
+  }
+
+  // Scenario Management
+  async createScenario(scenarioData: any) {
+    return this.request('/api/v1/economic/scenarios/create', {
+      method: 'POST',
+      body: JSON.stringify(scenarioData),
     });
-    return response.data;
-  },
+  }
 
-  // Scenarios
-  getScenarios: async (): Promise<Scenario[]> => {
-    const response = await api.get('/api/v1/scenarios/');
-    return response.data;
-  },
+  async getScenarioResults(scenarioId: number) {
+    return this.request(`/api/v1/economic/scenarios/${scenarioId}/results`);
+  }
 
-  createScenario: async (scenario: Omit<Scenario, 'id' | 'created_at' | 'user_id'>): Promise<Scenario> => {
-    const response = await api.post('/api/v1/scenarios/', scenario);
-    return response.data;
-  },
+  // Health Check
+  async healthCheck() {
+    return this.request('/api/v1/economic/health');
+  }
 
-  // Risk Assessments
-  createRiskAssessment: async (
-    assessment: Omit<RiskAssessment, 'id' | 'created_at'>
-  ): Promise<RiskAssessment> => {
-    const response = await api.post('/api/v1/risk-assessment/', assessment);
-    return response.data;
-  },
-};
+  // Generic Data Fetcher with Fallback
+  async fetchWithFallback<T>(
+    primaryFetch: () => Promise<T>,
+    fallbackData: T,
+    errorMessage: string = 'Failed to fetch data'
+  ): Promise<T> {
+    try {
+      return await primaryFetch();
+    } catch (error) {
+      console.warn(`${errorMessage}. Using fallback data:`, error);
+      return fallbackData;
+    }
+  }
+}
 
-export default api; 
+export const apiService = new ApiService();
+export default apiService; 
